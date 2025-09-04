@@ -1,23 +1,25 @@
-# Step 1: Use a Gradle image to build the app
-FROM gradle:8.2.1-jdk17 AS builder
+# Use official OpenJDK 17 image
+FROM openjdk:17-jdk-slim
+
+# Set working directory
 WORKDIR /app
 
-# Copy everything to /app
-COPY . .
+# Copy Gradle wrapper and build files first (for caching)
+COPY build.gradle settings.gradle ./
+COPY gradlew .
+COPY gradle ./gradle
 
-# Build the Spring Boot app
-RUN gradle clean build --no-daemon
+# Copy source code
+COPY src ./src
 
-# Step 2: Use a smaller JDK runtime image for running the app
-FROM eclipse-temurin:17-jdk-jammy
+# Build the JAR inside the container
+RUN ./gradlew clean bootJar --no-daemon
 
-WORKDIR /app
+# Copy the generated JAR to a fixed name
+RUN cp build/libs/*.jar app.jar
 
-# Copy the JAR from the builder stage
-COPY --from=builder /app/build/libs/*.jar app.jar
+# Expose port (matches your application.properties server.port)
+EXPOSE 8081
 
-# Expose port 8080
-EXPOSE 8080
-
-# Run the app
+# Run the JAR
 ENTRYPOINT ["java","-jar","app.jar"]
