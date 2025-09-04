@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>House Finder</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css"/>
+    <style>
+        #map { height: 500px; margin-top: 10px; }
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        input, button { padding: 8px; margin-right: 10px; }
+        #modeButtons button { margin-right: 5px; }
+        p#error { color:red; }
+    </style>
+</head>
+<body>
+
+<h2>🏠 House Finder (Tilottama Ward-9)</h2>
+
+<form id="searchForm">
+    <input type="text" name="name" placeholder="Enter house name..." required>
+    <button type="submit">Search</button>
+</form>
+
+<div id="modeButtons">
+    <button type="button" onclick="setMode('car')">Car 🚗</button>
+    <button type="button" onclick="setMode('bike')">Bike 🚲</button>
+    <button type="button" onclick="setMode('walk')">Walk 🚶</button>
+</div>
+
+<p id="error"></p>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js"></script>
+<script>
+    const defaultLat = 27.6612;
+    const defaultLng = 83.5469;
+
+    const map = L.map('map').setView([defaultLat, defaultLng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const tilottamaMarker = L.marker([defaultLat, defaultLng])
+        .addTo(map)
+        .bindPopup("Tilottama Ward-9")
+        .openPopup();
+
+    let userMarker = null;
+    let destinationMarker = null;
+    let routingControl = null;
+    let travelMode = 'car'; // default mode
+
+    function updateUserLocation(callback) {
+        if(navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+
+                if(!userMarker) {
+                    userMarker = L.marker([lat, lng]).addTo(map).bindPopup("You are here").openPopup();
+                } else {
+                    userMarker.setLatLng([lat, lng]);
+                }
+
+                map.setView([lat, lng]);
+
+                if(callback) callback(lat, lng);
+
+            }, function() { if(callback) callback(null, null); });
+        } else { if(callback) callback(null, null); }
+    }
+
+    setInterval(updateUserLocation, 3000);
+
+    function createRoute(userLat, userLng, houseLat, houseLng, mode = 'car', houseName = "Destination") {
+        if(routingControl) map.removeControl(routingControl);
+        if(!userLat || !userLng) return;
+
+        let routerOptions = {
+            waypoints: [
+                L.latLng(userLat, userLng),
+                L.latLng(houseLat, houseLng)
+            ],
+            routeWhileDragging: true,
+            addWaypoints: false,
+            draggableWaypoints: false
+        };
+
+        // travel mode profiles
+        if(mode === 'walk') routerOptions.router = L.Routing.osrmv1({ profile: 'foot', serviceUrl: 'https://router.project-osrm.org/route/v1' });
+        else if(mode === 'bike') routerOptions.router = L.Routing.osrmv1({ profile: 'bike', serviceUrl: 'https://router.project-osrm.org/route/v1' });
+        else routerOptions.router = L.Routing.osrmv1({ profile: 'car', serviceUrl: 'https://router.project-osrm.org/route/v1' });
+
+        routingControl = L.Routing.control(routerOptions).addTo(map);
+
+        routingControl.on('routesfound', function(e){
+            const summary = e.routes[0].summary;
+            const distanceKm = (summary.totalDistance / 1000).toFixed(2);
+            const timeMin = Math.ceil(summary.totalTime / 60);
+
+            if(destinationMarker)
+                destinationMarker.bindPopup(`${houseName}<br>Distance: ${distanceKm} km<br>Estimated time: ${timeMin} min (${mode})`).openPopup();
+        });
+    }
+
+    function setMode(mode) {
+        travelMode = mode;
+        if(userMarker && destinationMarker)
+            createRoute(userMarker.getLatLng().lat, userMarker.getLatLng().lng, destinationMarker.getLatLng().lat, destinationMarker.getLatLng().lng, travelMode);
+    }
+
+    document.getElementById("searchForm").addEventListener("submit", function(e){
+        e.preventDefault();
+        const formData = new FormData(this);
+        const params = new URLSearchParams();
+        for (let pair of formData.entries()) params.append(pair[0], pair[1]);
+
+        fetch("/search", { method: "POST", body: params, headers: { "Content-Type": "application/x-www-form-urlencoded" } })
+        .then(res => res.json())
+        .then(data => {
+            if(data.error) {
+                document.getElementById("error").textContent = data.error;
+                if(destinationMarker) map.removeLayer(destinationMarker);
+                if(routingControl) map.removeControl(routingControl);
+                return;
+            }
+
+            document.getElementById("error").textContent = "";
+            const houseLat = data.lat;
+            const houseLng = data.lng;
+            const houseName = data.name;
+
+            if(destinationMarker) map.removeLayer(destinationMarker);
+            destinationMarker = L.marker([houseLat, houseLng]).addTo(map).bindPopup(houseName).openPopup();
+
+            updateUserLocation(function(userLat, userLng){
+                if(userLat && userLng) createRoute(userLat, userLng, houseLat, houseLng, travelMode, houseName);
+            });
+        })
+        .catch(err => {
+            document.getElementById("error").textContent = "Something went wrong!";
+            console.error(err);
+        });
+    });
+</script>
+
+</body>
+</html>
